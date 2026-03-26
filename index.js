@@ -1,5 +1,7 @@
 const axios = require('axios');
 
+// --- CONFIGURAÇÕES E UTILITÁRIOS ---
+
 function secureLog(message, isError = false) {
     const timestamp = new Date().toISOString();
     console.log(`[${timestamp}] [${isError ? 'ERROR' : 'INFO'}] ${message}`);
@@ -12,7 +14,12 @@ function sanitize(val) {
     return val;
 }
 
-// Converte Data do Sheets (DD/MM/YYYY) ou ISO para Número Serial do Excel
+function formatarDataBR(dataInput) {
+    if (!dataInput) return "";
+    const data = new Date(dataInput);
+    return data.toLocaleDateString('pt-BR');
+}
+
 function dateToExcelSerial(dateInput) {
     let date;
     if (typeof dateInput === 'string' && dateInput.includes('/')) {
@@ -21,9 +28,12 @@ function dateToExcelSerial(dateInput) {
     } else {
         date = new Date(dateInput);
     }
+    if (isNaN(date)) return "";
     const returnDateTime = 25569.0 + (date.getTime() - (date.getTimezoneOffset() * 60 * 1000)) / (1000 * 60 * 60 * 24);
     return Math.floor(returnDateTime);
 }
+
+// --- EXECUÇÃO ---
 
 async function run() {
     try {
@@ -31,14 +41,31 @@ async function run() {
         const gHeaders = { 'Authorization': `Bearer ${GOOGLE_TOKEN}`, 'Content-Type': 'application/json' };
         const sigeHeaders = { "Authorization-Token": SIGE_TOKEN, "User": SIGE_USER, "App": SIGE_APP, "Content-Type": "application/json" };
 
-        secureLog("Lendo base ERP...");
-        const resErp = await axios.get(`https://sheets.googleapis.com/v4/spreadsheets/${ERP_SPREADSHEET_ID}/values/ERP!A:AH`, { headers: gHeaders });
-        const erpRows = resErp.data.values || [];
+        // 1. DESCOBRIR O TAMANHO DA ABA ERP E DEFINIR O RANGE
+        secureLog("Calculando intervalo de busca no ERP...");
+        const meta = await axios.get(
+            `https://sheets.googleapis.com/v4/spreadsheets/${ERP_SPREADSHEET_ID}?fields=sheets(properties(title,gridProperties/rowCount))`,
+            { headers: gHeaders }
+        );
+        const erpSheet = meta.data.sheets.find(s => s.properties.title === 'ERP');
+        const totalRows = erpSheet.properties.gridProperties.rowCount;
         
-        // Mapeamento baseado no seu CSV: 
-        // D=3 (CPF), G=6 (Tipo), P=15 (Responsável), Q=16 (Chave), T=19 (Data), AH=33 (Mês)
-        const COL = { CPF: 3, TIPO: 6, RESP: 15, CHAVE: 16, DATA: 19, MES: 33 };
+        // Coletamos as últimas 25.000 linhas
+        const numLinhas = 25000;
+        const startRow = Math.max(1, totalRows - numLinhas);
+        const range = `ERP!A${startRow}:AH${totalRows}`;
 
+        secureLog(`Coletando bloco de ${numLinhas} linhas (${range})...`);
+        const resErp = await axios.get(
+            `https://sheets.googleapis.com/v4/spreadsheets/${ERP_SPREADSHEET_ID}/values/${range}`,
+            { headers: gHeaders }
+        );
+        const erpRows = resErp.data.values || [];
+
+        // Mapeamento (Ajuste os índices se o bloco começar em startRow > 1, mas o .find lida com o array relativo)
+        const COL = { CPF: 3, TIPO: 6, RESP: 15, CHAVE: 16, DATA: 19 };
+
+        // 2. BUSCAR PEDIDOS NO SIGE
         const ontem = new Date();
         ontem.setDate(ontem.getDate() - 1);
         const dataBusca = ontem.toISOString().split('T')[0];
@@ -49,25 +76,23 @@ async function run() {
         });
 
         const pedidos = resSige.data || [];
-        if (pedidos.length === 0) return secureLog("Sem novos pedidos.");
+        if (pedidos.length === 0) return secureLog("Nenhum pedido faturado para processar.");
 
         const rowsFinal = [];
 
         for (const p of pedidos) {
-            const clienteCpfOriginal = p.ClienteCNPJ || "";
-            const clienteCpfLimpo = clienteCpfOriginal.replace(/\D/g, "");
+            const clienteCpfLimpo = (p.ClienteCNPJ || "").replace(/\D/g, "");
             const dataVenda = new Date(p.DataFaturamento || p.Data);
             
             let rawDataNovoServico = "";
             let rawDataRetirada = "";
 
-            // Busca Reversa no ERP (Limitada às últimas 10k linhas para performance)
-            const startSearch = Math.max(1, erpRows.length - 10000);
-            for (let i = erpRows.length - 1; i >= startSearch; i--) {
+            // Busca no bloco de 25k (de baixo para cima)
+            for (let i = erpRows.length - 1; i >= 0; i--) {
                 const r = erpRows[i];
                 const erpCpfLimpo = (r[COL.CPF] || "").replace(/\D/g, "");
 
-                if (erpCpfLimpo === clienteCpfLimpo) {
+                if (erpCpfLimpo === clienteCpfLimpo && clienteCpfLimpo !== "") {
                     const tipo = (r[COL.TIPO] || "").toLowerCase();
                     if (!rawDataNovoServico && tipo.includes("novo")) rawDataNovoServico = r[COL.DATA];
                     if (!rawDataRetirada && tipo.includes("retirada")) rawDataRetirada = r[COL.DATA];
@@ -75,25 +100,20 @@ async function run() {
                 if (rawDataNovoServico && rawDataRetirada) break;
             }
 
-            // FUNÇÃO DE BUSCA DO VENDEDOR (Normaliza Chave da Coluna Q)
+            // Busca do Responsável baseada na Chave Normalizada (Data + CPF)
             const buscarResp = (dataAchada) => {
                 if (!dataAchada) return "Sem vendedor";
-                // Limpa tudo o que não é número da chave para comparar (Data + CPF)
-                const chaveAlvo = (dataAchada + clienteCpfLimpo).replace(/\D/g, "");
+                const chaveBuscadaLimpa = (dataAchada + clienteCpfLimpo).replace(/\D/g, "");
                 
                 const match = erpRows.find(r => {
                     const chavePlanilha = (r[COL.CHAVE] || "").replace(/\D/g, "");
-                    return chavePlanilha.includes(chaveAlvo) || chaveAlvo.includes(chavePlanilha);
+                    return chavePlanilha !== "" && (chavePlanilha.includes(chaveBuscadaLimpa) || chaveBuscadaLimpa.includes(chavePlanilha));
                 });
                 return match ? match[COL.RESP] : "Sem vendedor";
             };
 
             const respM = buscarResp(rawDataNovoServico);
             const respP = buscarResp(rawDataRetirada);
-
-            const valorTotal = p.ValorFinal || 0;
-            const valN = rawDataRetirada !== "" ? valorTotal * 0.5 : valorTotal;
-            const valQ = rawDataRetirada !== "" ? valorTotal * 0.5 : 0;
 
             rowsFinal.push([
                 "", // A
@@ -103,16 +123,16 @@ async function run() {
                 sanitize(p.Cliente || ""), // E
                 "", // F
                 sanitize(p.ClienteEmail || ""), // G
-                valorTotal, // H
+                p.ValorFinal || 0, // H
                 sanitize(p.Vendedor || ""), // I
                 sanitize(`Pedido ${p.Codigo}`), // J
-                sanitize(clienteCpfOriginal), // K
+                sanitize(p.ClienteCNPJ || ""), // K
                 rawDataNovoServico ? dateToExcelSerial(rawDataNovoServico) : "", // L
                 sanitize(respM), // M
-                valN, // N
+                rawDataRetirada !== "" ? (p.ValorFinal * 0.5) : (p.ValorFinal || 0), // N
                 rawDataRetirada ? dateToExcelSerial(rawDataRetirada) : "", // O
                 sanitize(respP), // P
-                valQ, // Q
+                rawDataRetirada !== "" ? (p.ValorFinal * 0.5) : 0, // Q
                 `${dataVenda.getMonth() + 1}/${dataVenda.getFullYear()}` // R
             ]);
         }
@@ -122,10 +142,12 @@ async function run() {
                 `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Faturamento:append?valueInputOption=USER_ENTERED`,
                 { values: rowsFinal }, { headers: gHeaders }
             );
-            secureLog(`Processado: ${rowsFinal.length} pedidos.`);
+            secureLog(`Concluído: ${rowsFinal.length} registros enviados.`);
         }
     } catch (err) {
-        secureLog(err.message, true);
+        secureLog(`Erro: ${err.message}`, true);
+        process.exit(1);
     }
 }
+
 run();
