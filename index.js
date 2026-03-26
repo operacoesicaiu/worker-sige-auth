@@ -34,27 +34,25 @@ function dateToExcelSerial(dateStr) {
 
 function buscarDataRetirada(erpRows, cpfLimpo, dataVenda, COL) {
     let maxDataSerial = 0;
-    
-    // Converte dataVenda para objeto Date para comparação
     const dataLimite = new Date(dataVenda);
     
     erpRows.forEach(r => {
         const erpCpfLimpo = (r[COL.CPF] || "").replace(/\D/g, "");
         const tipo = (r[COL.TIPO] || "").toLowerCase();
-        const dataERPStr = r[COL.DATA]; // Assumindo DD/MM/YYYY
+        const dataERPStr = r[COL.DATA]; 
         
-        if (erpCpfLimpo === cpfLimpo && tipo.includes("retirada")) {
+        if (erpCpfLimpo === cpfLimpo && tipo.includes("retirada") && dataERPStr) {
             const partes = dataERPStr.split('/');
-            const dataERP = new Date(partes[2], partes[1] - 1, partes[0]);
-            
-            // Filtro: Data ERP <= Data Venda
-            if (dataERP <= dataLimite) {
-                const serial = dateToExcelSerial(dataERPStr);
-                if (serial > maxDataSerial) maxDataSerial = serial;
+            if (partes.length === 3) {
+                const dataERP = new Date(partes[2], partes[1] - 1, partes[0]);
+                if (dataERP <= dataLimite) {
+                    const serial = dateToExcelSerial(dataERPStr);
+                    if (serial > maxDataSerial) maxDataSerial = serial;
+                }
             }
         }
     });
-    return maxDataSerial > 0 ? maxDataSerial : "";
+    return maxDataSerial > 0 ? `'${maxDataSerial}` : "";
 }
 
 const buscarResp = (dataSerialBuscada, cpfLimpo, erpRows, COL) => {
@@ -133,7 +131,7 @@ async function run() {
                 (r[COL.TIPO] || "").toLowerCase().includes("novo")
             );
             if (matchNovo) rawDataNovoServico = matchNovo[COL.DATA];
-            const serialNovo = rawDataNovoServico ? dateToExcelSerial(rawDataNovoServico) : "";
+            const serialNovo = rawDataNovoServico ? `'${dateToExcelSerial(rawDataNovoServico)}` : "";
 
             const dataVenda = new Date(p.DataFaturamento || p.Data);
             const valorTotal = p.ValorFinal || 0;
