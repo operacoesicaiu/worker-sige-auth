@@ -92,23 +92,39 @@ async function run() {
         // Mapeamento baseado no CSV: D=3(CPF), G=6(Tipo), P=15(Responsável), Q=16(Chave), T=19(Data)
         const COL = { CPF: 3, TIPO: 6, RESP: 15, CHAVE: 16, DATA: 19 };
 
-        // 2. Busca Pedidos faturados ontem no SIGE
-        /*
-        const ontem = new Date();
-        ontem.setDate(ontem.getDate() - 1);
-        const dataBusca = ontem.toISOString().split('T')[0];
-        secureLog(`Buscando pedidos SIGE: ${dataBusca}`);
-        */
-        const dataInicial = "2026-03-01";
-        const hoje = "2026-03-07";
-        secureLog(`Iniciando busca SIGE: ${dataInicial} até ${hoje}`);
+        // 2. Busca Pedidos faturados no período desejado (01/03/2026 a 26/03/2026)
+        
+        const dataInicial = new Date('2026-03-01');
+        const dataFinal = new Date('2026-03-26');
+        const pedidos = [];
 
-        const resSige = await axios.get("https://api.sigecloud.com.br/request/Pedidos/Pesquisar", {
-            headers: sigeHeaders,
-            params: { status: "Pedido Faturado", dataInicial: dataBusca, dataFinal: dataBusca, filtrarPor: 3, pageSize: 100 }
-        });
+        secureLog(`Buscando pedidos SIGE do período ${dataInicial.toISOString().split('T')[0]} a ${dataFinal.toISOString().split('T')[0]}`);
 
-        const pedidos = resSige.data || [];
+        // Itera dia a dia para garantir que todas as requisições sejam feitas sequencialmente
+        for (let currentDate = new Date(dataInicial); currentDate <= dataFinal; currentDate.setDate(currentDate.getDate() + 1)) {
+            const dataBusca = currentDate.toISOString().split('T')[0];
+            secureLog(`Buscando pedidos SIGE para o dia: ${dataBusca}`);
+
+            try {
+                const resSige = await axios.get("https://api.sigecloud.com.br/request/Pedidos/Pesquisar", {
+                    headers: sigeHeaders,
+                    params: { status: "Pedido Faturado", dataInicial: dataBusca, dataFinal: dataBusca, filtrarPor: 3, pageSize: 100 }
+                });
+
+                const diaPedidos = resSige.data || [];
+                if (diaPedidos.length > 0) {
+                    pedidos.push(...diaPedidos);
+                    secureLog(`Dia ${dataBusca}: ${diaPedidos.length} pedidos encontrados`);
+                } else {
+                    secureLog(`Dia ${dataBusca}: nenhum pedido encontrado`);
+                }
+            } catch (error) {
+                secureLog(`Erro ao buscar pedidos para o dia ${dataBusca}: ${error.message}`, true);
+                // Continua com os próximos dias mesmo se houver erro em algum dia
+            }
+        }
+
+        secureLog(`Total de pedidos coletados no período: ${pedidos.length}`);
         if (pedidos.length === 0) return secureLog("Nenhum pedido para processar.");
 
         const rowsFinal = [];
