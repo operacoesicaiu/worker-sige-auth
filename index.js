@@ -52,7 +52,7 @@ function buscarDataRetirada(erpRows, cpfLimpo, dataVenda, COL) {
             }
         }
     });
-    return maxDataSerial > 0 ? `'${maxDataSerial}` : "";
+    return maxDataSerial > 0 ? maxDataSerial : "";
 }
 
 const buscarResp = (dataSerialBuscada, cpfLimpo, erpRows, COL) => {
@@ -131,7 +131,7 @@ async function run() {
                 (r[COL.TIPO] || "").toLowerCase().includes("novo")
             );
             if (matchNovo) rawDataNovoServico = matchNovo[COL.DATA];
-            const serialNovo = rawDataNovoServico ? `'${dateToExcelSerial(rawDataNovoServico)}` : "";
+            const serialNovo = rawDataNovoServico ? dateToExcelSerial(rawDataNovoServico) : "";
 
             const dataVenda = new Date(p.DataFaturamento || p.Data);
             const valorTotal = p.ValorFinal || 0;
@@ -143,26 +143,30 @@ async function run() {
             const respNovo = buscarResp(serialNovo, clienteCpfLimpo, erpRows, COL);
             const respRetirada = buscarResp(serialRetirada, clienteCpfLimpo, erpRows, COL);
 
+            // Ajuste para não virar data e inserir 0 se estiver vazio
+            const displayNovo = serialNovo !== "" ? `'${serialNovo}` : 0;
+            const displayRetirada = serialRetirada !== "" ? `'${serialRetirada}` : 0;
+
             // --- MONTAGEM DA LINHA ---
             rowsFinal.push([
-                sanitize((c.Celular || "").replace("+", "")), // A - Celular (API Pessoas)
-                p.Codigo, // B - Código
-                sanitize(p.StatusSistema || ""), // C - Status
-                formatarDataBR(dataVenda), // D - Data Venda
-                sanitize(c.NomeFantasia || p.Cliente || ""), // E - Nome (API Pessoas)
-                sanitize(c.Telefone || ""), // F - Telefone (API Pessoas)
-                sanitize(c.Email || p.ClienteEmail || ""), // G - Email
-                valorTotal, // H - Valor
-                sanitize(p.Vendedor || ""), // I - Vendedor SIGE
-                sanitize(`Pedido ${p.Codigo}${p.NumeroNFe ? ' / NF Nº ' + p.NumeroNFe : ''}`), // J - Documento
-                sanitize(clienteCpf), // K - CPF
-                serialNovo,      // L
-                sanitize(respNovo), // M
+                sanitize((c.Celular || "").replace("+", "")), // A
+                p.Codigo, // B
+                sanitize(p.StatusSistema || ""), // C
+                formatarDataBR(dataVenda), // D
+                sanitize(c.NomeFantasia || p.Cliente || ""), // E
+                sanitize(c.Telefone || ""), // F
+                sanitize(c.Email || p.ClienteEmail || ""), // G
+                valorTotal, // H
+                sanitize(p.Vendedor || ""), // I
+                sanitize(`Pedido ${p.Codigo}${p.NumeroNFe ? ' / NF Nº ' + p.NumeroNFe : ''}`), // J
+                sanitize(clienteCpf), // K
+                displayNovo,          // L (Envia '46106 ou 0)
+                sanitize(respNovo),   // M
                 serialRetirada !== "" ? (valorTotal * 0.5) : valorTotal, // N
-                serialRetirada,  // O (Agora retorna o número serial 46106...)
+                displayRetirada,      // O (Envia '46106 ou 0)
                 sanitize(respRetirada), // P
-                serialRetirada !== "" ? (valorTotal * 0.5) : 0, // Q
-                `${dataVenda.getMonth() + 1}/${dataVenda.getFullYear()}` // R - Mês/Ano
+                serialRetirada !== "" ? (valorTotal * 0.5) : 0,          // Q
+                `${dataVenda.getMonth() + 1}/${dataVenda.getFullYear()}` // R
             ]);
         }
 
@@ -176,7 +180,7 @@ async function run() {
         }
 
     } catch (err) {
-        secureLog(`Erro Crítico: ${err.message}`, true);
+        secureLog(`Erro Crítico na execução. Verifique as credenciais e conexão.`, true);
         process.exit(1);
     }
 }
