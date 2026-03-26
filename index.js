@@ -68,10 +68,10 @@ async function run() {
                         if (resPessoa.data && resPessoa.data.length > 0) {
                             c = resPessoa.data[0]; // Take the first person found
                         } else {
-                            secureLog(`Cliente com CPF/CNPJ ${clienteCpf} não encontrado na API ou dados vazios para Pedido ${p.Codigo}`, false);
+                            secureLog(`Cliente com CPF/CNPJ não encontrado na API ou dados vazios para Pedido ${p.Codigo}`, false);
                         }
                     } catch (errApi) {
-                        secureLog(`Erro na API ao buscar cliente ${clienteCpf} para Pedido ${p.Codigo}: ${errApi.message}`, true);
+                        secureLog(`Erro na API ao buscar detalhes do cliente para Pedido ${p.Codigo}. Status: ${errApi.response ? errApi.response.status : "N/A"}`, true);
                     }
                 }
 
