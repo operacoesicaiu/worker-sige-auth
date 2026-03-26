@@ -2,7 +2,7 @@ name: Sige Integration Worker
 
 on:
   repository_dispatch:
-    types: [google_token_ready]
+    types: [report_token_ready]
   workflow_dispatch: # Para testes manuais
 
 jobs:
