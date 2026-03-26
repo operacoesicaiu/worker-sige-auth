@@ -1,9 +1,23 @@
 const axios = require('axios');
 
+// Função de log seguro (venda no GitHub)
 function secureLog(message, isError = false) {
     const timestamp = new Date().toISOString();
-    const logLevel = isError ? 'ERROR' : 'INFO';
-    console.log(`[${timestamp}] [${logLevel}] ${message}`);
+    console.log(`[${timestamp}] [${isError ? 'ERROR' : 'INFO'}] ${message}`);
+}
+
+// NOVA: Função para enviar logs detalhados para o Google Sheets
+async function debugToSheet(logs, spreadsheetId, token) {
+    if (logs.length === 0) return;
+    try {
+        await axios.post(
+            `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/DEBUG:append?valueInputOption=USER_ENTERED`,
+            { values: logs.map(l => [new Date().toISOString(), l]) },
+            { headers: { 'Authorization': `Bearer ${token}` } }
+        );
+    } catch (e) {
+        console.log("Erro ao salvar log no Sheets");
+    }
 }
 
 function sanitize(val) {
@@ -19,7 +33,6 @@ function formatarDataBR(dataISO) {
     return data.toLocaleDateString('pt-BR');
 }
 
-// Converte Data do JS para Número Serial do Excel (ex: 46106)
 function dateToExcelSerial(date) {
     const returnDateTime = 25569.0 + (date.getTime() - (date.getTimezoneOffset() * 60 * 1000)) / (1000 * 60 * 60 * 24);
     return Math.floor(returnDateTime);
@@ -33,6 +46,7 @@ function parseDataBR(str) {
 }
 
 async function run() {
+    const debugBuffer = []; // Armazena logs para enviar de uma vez
     try {
         const { SIGE_TOKEN, SIGE_USER, SIGE_APP, GOOGLE_TOKEN, SPREADSHEET_ID, ERP_SPREADSHEET_ID } = process.env;
         const gHeaders = { 'Authorization': `Bearer ${GOOGLE_TOKEN}`, 'Content-Type': 'application/json' };
@@ -42,7 +56,6 @@ async function run() {
         const resErp = await axios.get(`https://sheets.googleapis.com/v4/spreadsheets/${ERP_SPREADSHEET_ID}/values/ERP!A:AH`, { headers: gHeaders });
         const erpRows = resErp.data.values || [];
         
-        // Mapeamento: D=3 (CPF), G=6 (Tipo), N=13 (Resp), Q=16 (Chave), T=19 (Data), AH=33 (MM/YYYY)
         const COL = { CPF: 3, TIPO: 6, RESP: 13, CHAVE: 16, DATA: 19, MESANO: 33 };
 
         const ontem = new Date();
@@ -61,12 +74,15 @@ async function run() {
 
         for (const p of pedidos) {
             let c = {};
-            const clienteCpf = (p.ClienteCNPJ || "").replace(/\D/g, ""); // Apenas números para comparar
+            const clienteCpfOriginal = p.ClienteCNPJ || "";
+            const clienteCpfLimpo = clienteCpfOriginal.replace(/\D/g, "");
             
-            if (clienteCpf) {
+            debugBuffer.push(`Processando Pedido ${p.Codigo} - CPF: ${clienteCpfOriginal}`);
+
+            if (clienteCpfLimpo) {
                 try {
                     const resP = await axios.get("https://api.sigecloud.com.br/request/Pessoas/Pesquisar", {
-                        headers: sigeHeaders, params: { cpfcnpj: p.ClienteCNPJ }
+                        headers: sigeHeaders, params: { cpfcnpj: clienteCpfOriginal }
                     });
                     if (resP.data?.length > 0) c = resP.data[0];
                 } catch (e) {}
@@ -92,41 +108,39 @@ async function run() {
                 if (!r[COL.DATA]) continue;
 
                 const dataErpObj = parseDataBR(r[COL.DATA]);
-                if (!dataErpObj || dataErpObj < dataLimite6Meses) {
-                    if (dataErpObj && dataErpObj < dataLimite6Meses) break; 
-                    continue;
-                }
-                
+                if (!dataErpObj) continue;
+
+                if (dataErpObj < dataLimite6Meses) break; 
                 if (dataErpObj > dataVenda) continue;
 
                 const erpCpfLimpo = (r[COL.CPF] || "").replace(/\D/g, "");
-                if (erpCpfLimpo === clienteCpf) {
+
+                if (erpCpfLimpo === clienteCpfLimpo) {
                     const tipo = (r[COL.TIPO] || "").trim();
-                    const mesAno = r[COL.MESANO];
+                    const mesAno = (r[COL.MESANO] || "").trim();
 
                     if (!rawDataNovoServico && tipo === "Novo Serviço" && mesesInteresse.includes(mesAno)) {
                         rawDataNovoServico = r[COL.DATA];
+                        debugBuffer.push(`[ACHOU NOVO SERVIÇO] Data: ${rawDataNovoServico} para Pedido ${p.Codigo}`);
                     }
                     if (!rawDataRetirada && tipo === "Retirada" && mesesInteresse.includes(mesAno)) {
                         rawDataRetirada = r[COL.DATA];
+                        debugBuffer.push(`[ACHOU RETIRADA] Data: ${rawDataRetirada} para Pedido ${p.Codigo}`);
                     }
                 }
-                if (rawDataNovoServico && rawDataRetirada) break;
             }
 
-            // Simulação do CORRESP/ÍNDICE (Chave é Data + CPF original da linha)
             const buscarResp = (dataEncontrada) => {
                 if (!dataEncontrada) return "Sem vendedor";
-                // Procura a linha onde a Coluna Q (Chave) bate exatamente
-                const chaveAlvo = dataEncontrada + p.ClienteCNPJ;
-                const match = erpRows.find(r => r[COL.CHAVE] === chaveAlvo);
+                const chaveAlvo = dataEncontrada + clienteCpfOriginal;
+                const match = erpRows.find(r => (r[COL.CHAVE] || "").trim() === chaveAlvo.trim());
+                if (!match) debugBuffer.push(`[FALHA INDEX MATCH] Chave buscada: "${chaveAlvo}" não encontrada.`);
                 return match ? match[COL.RESP] : "Sem vendedor";
             };
 
             const respM = buscarResp(rawDataNovoServico);
             const respP = buscarResp(rawDataRetirada);
 
-            // Conversão para Número Serial para as colunas L e O (estilo 46106)
             const excelL = rawDataNovoServico ? dateToExcelSerial(parseDataBR(rawDataNovoServico)) : "";
             const excelO = rawDataRetirada ? dateToExcelSerial(parseDataBR(rawDataRetirada)) : "";
 
@@ -136,24 +150,24 @@ async function run() {
             const valR = `${dataVenda.getMonth() + 1}/${dataVenda.getFullYear()}`;
 
             rowsFinal.push([
-                sanitize((c.Celular || "").replace("+", "")), // A
-                p.Codigo, // B
-                sanitize(p.StatusSistema || ""), // C
-                formatarDataBR(dataVenda), // D
-                sanitize(c.NomeFantasia || p.Cliente || ""), // E
-                sanitize(c.Telefone || ""), // F
-                sanitize(c.Email || p.ClienteEmail || ""), // G
-                valorTotal, // H
-                sanitize(p.Vendedor || ""), // I
-                sanitize(`Pedido ${p.Codigo}${p.NumeroNFe ? ' / NF Nº ' + p.NumeroNFe : ''}`), // J
-                sanitize(p.ClienteCNPJ || ""), // K
-                excelL, // L (Número Serial 46106)
-                sanitize(respM), // M
-                valN, // N
-                excelO, // O (Número Serial 46106)
-                sanitize(respP), // P
-                valQ, // Q
-                valR  // R
+                sanitize((c.Celular || "").replace("+", "")),
+                p.Codigo,
+                sanitize(p.StatusSistema || ""),
+                formatarDataBR(dataVenda),
+                sanitize(c.NomeFantasia || p.Cliente || ""),
+                sanitize(c.Telefone || ""),
+                sanitize(c.Email || p.ClienteEmail || ""),
+                valorTotal,
+                sanitize(p.Vendedor || ""),
+                sanitize(`Pedido ${p.Codigo}${p.NumeroNFe ? ' / NF Nº ' + p.NumeroNFe : ''}`),
+                sanitize(clienteCpfOriginal),
+                excelL,
+                sanitize(respM),
+                valN,
+                excelO,
+                sanitize(respP),
+                valQ,
+                valR
             ]);
         }
 
@@ -163,7 +177,11 @@ async function run() {
                 { values: rowsFinal }, { headers: gHeaders }
             );
         }
+        
+        // Salva os logs de debug antes de terminar
+        await debugToSheet(debugBuffer, SPREADSHEET_ID, GOOGLE_TOKEN);
         secureLog("Sucesso.");
+        
     } catch (err) {
         secureLog(`Erro: ${err.message}`, true);
         process.exit(1);
