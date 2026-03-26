@@ -20,7 +20,7 @@ function formatarDataBR(dataInput) {
     return data.toLocaleDateString('pt-BR');
 }
 
-// Converte string DD/MM/YYYY para Número Serial do Excel (essencial para suas fórmulas)
+// Converte string DD/MM/YYYY para Número Serial do Excel 
 function dateToExcelSerial(dateStr) {
     if (!dateStr || typeof dateStr !== 'string' || !dateStr.includes('/')) return "";
     const partes = dateStr.split('/');
@@ -89,7 +89,7 @@ async function run() {
         const resErp = await axios.get(`https://sheets.googleapis.com/v4/spreadsheets/${ERP_SPREADSHEET_ID}/values/ERP!A${startRow}:AH${totalRows}`, { headers: gHeaders });
         const erpRows = resErp.data.values || [];
         
-        // Mapeamento baseado no seu CSV: D=3(CPF), G=6(Tipo), P=15(Responsável), Q=16(Chave), T=19(Data)
+        // Mapeamento baseado no CSV: D=3(CPF), G=6(Tipo), P=15(Responsável), Q=16(Chave), T=19(Data)
         const COL = { CPF: 3, TIPO: 6, RESP: 15, CHAVE: 16, DATA: 19 };
 
         // 2. Busca Pedidos faturados ontem no SIGE
