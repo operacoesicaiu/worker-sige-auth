@@ -57,7 +57,7 @@ function buscarDataRetirada(erpRows, cpfLimpo, dataVenda, COL) {
     return maxDataSerial > 0 ? maxDataSerial : "";
 }
 
-const buscarResp = (dataSerialBuscada, cpfLimpo) => {
+const buscarResp = (dataSerialBuscada, cpfLimpo, erpRows, COL) => {
     if (!dataSerialBuscada) return "Sem vendedor";
 
     // O Excel armazena datas como números. Se r[COL.DATA] no ERP 
@@ -142,8 +142,8 @@ async function run() {
             const serialRetirada = buscarDataRetirada(erpRows, clienteCpfLimpo, dataVenda, COL);
 
             // --- LÓGICA COLUNAS M e P (Responsáveis) ---
-            const respNovo = buscarResp(serialNovo, clienteCpfLimpo);
-            const respRetirada = buscarResp(serialRetirada, clienteCpfLimpo);
+            const respNovo = buscarResp(serialNovo, clienteCpfLimpo, erpRows, COL);
+            const respRetirada = buscarResp(serialRetirada, clienteCpfLimpo, erpRows, COL);
 
             // --- MONTAGEM DA LINHA ---
             rowsFinal.push([
