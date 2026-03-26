@@ -125,23 +125,38 @@ async function run() {
 
             // --- LÓGICA COLUNA L (Novo Serviço) ---
             // Busca a data do tipo "Novo" mais próxima/recente
-            let rawDataNovoServico = "";
-            const matchNovo = erpRows.slice().reverse().find(r => 
-                (r[COL.CPF] || "").replace(/\D/g, "") === clienteCpfLimpo && 
-                (r[COL.TIPO] || "").toLowerCase().includes("novo")
-            );
-            if (matchNovo) rawDataNovoServico = matchNovo[COL.DATA];
-            const serialNovo = rawDataNovoServico ? dateToExcelSerial(rawDataNovoServico) : "";
+           let serialNovo = "";
+            let respNovo = "Sem vendedor";
+            let serialRetirada = "";
+            let respRetirada = "Sem vendedor";
 
             const dataVenda = new Date(p.DataFaturamento || p.Data);
             const valorTotal = p.ValorFinal || 0;
 
-            // --- LÓGICA COLUNA O (Retirada - MAXIFS) ---
-            const serialRetirada = buscarDataRetirada(erpRows, clienteCpfLimpo, dataVenda, COL);
+            // Busca os dados de "Novo" e "Retirada" em uma única passagem
+            erpRows.slice().reverse().forEach(r => {
+                const erpCpfLimpo = (r[COL.CPF] || "").replace(/\D/g, "");
+                if (erpCpfLimpo !== clienteCpfLimpo) return;
 
-            // --- LÓGICA COLUNAS M e P (Responsáveis) ---
-            const respNovo = buscarResp(serialNovo, clienteCpfLimpo, erpRows, COL);
-            const respRetirada = buscarResp(serialRetirada, clienteCpfLimpo, erpRows, COL);
+                const tipo = (r[COL.TIPO] || "").toLowerCase();
+                const dataERPStr = r[COL.DATA];
+                
+                // Se for NOVO e ainda não achamos o mais recente
+                if (tipo.includes("novo") && serialNovo === "") {
+                    serialNovo = dateToExcelSerial(dataERPStr);
+                    respNovo = r[COL.RESP] || "Sem vendedor";
+                }
+
+                // Se for RETIRADA e for antes/no dia da venda
+                if (tipo.includes("retirada") && serialRetirada === "") {
+                    const partes = dataERPStr.split('/');
+                    const dataERP = new Date(partes[2], partes[1] - 1, partes[0]);
+                    if (dataERP <= dataVenda) {
+                        serialRetirada = dateToExcelSerial(dataERPStr);
+                        respRetirada = r[COL.RESP] || "Sem vendedor";
+                    }
+                }
+            });
 
             // Ajuste para não virar data e inserir 0 se estiver vazio
             const displayNovo = serialNovo !== "" ? `'${serialNovo}` : 0;
