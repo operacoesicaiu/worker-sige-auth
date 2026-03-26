@@ -118,6 +118,9 @@ async function run() {
                 } else {
                     secureLog(`Dia ${dataBusca}: nenhum pedido encontrado`);
                 }
+                
+                // Controle de Concorrência: Pequeno delay entre requisições para evitar bloqueio
+                await new Promise(resolve => setTimeout(resolve, 500)); // 500ms de delay
             } catch (error) {
                 secureLog(`Erro ao buscar pedidos para o dia ${dataBusca}: ${error.message}`, true);
                 // Continua com os próximos dias mesmo se houver erro em algum dia
@@ -126,6 +129,9 @@ async function run() {
 
         secureLog(`Total de pedidos coletados no período: ${pedidos.length}`);
         if (pedidos.length === 0) return secureLog("Nenhum pedido para processar.");
+
+        // Cache de Clientes: Armazena clientes já consultados para evitar chamadas repetidas à API
+        const clienteCache = new Map();
 
         const rowsFinal = [];
 
@@ -136,12 +142,23 @@ async function run() {
             // --- BUSCA DETALHADA DO CLIENTE (PARA COLUNAS A e F) ---
             let c = {};
             if (clienteCpf) {
-                try {
-                    const resP = await axios.get("https://api.sigecloud.com.br/request/Pessoas/Pesquisar", {
-                        headers: sigeHeaders, params: { cpfcnpj: clienteCpf }
-                    });
-                    if (resP.data && resP.data.length > 0) c = resP.data[0];
-                } catch (e) { secureLog("Erro API Pessoas para CPF"); }
+                // Verifica se o cliente já foi consultado
+                if (clienteCache.has(clienteCpf)) {
+                    c = clienteCache.get(clienteCpf);
+                } else {
+                    try {
+                        const resP = await axios.get("https://api.sigecloud.com.br/request/Pessoas/Pesquisar", {
+                            headers: sigeHeaders, params: { cpfcnpj: clienteCpf }
+                        });
+                        if (resP.data && resP.data.length > 0) {
+                            c = resP.data[0];
+                            // Armazena no cache para consultas futuras
+                            clienteCache.set(clienteCpf, c);
+                        }
+                    } catch (e) { 
+                        secureLog("Erro API Pessoas para CPF"); 
+                    }
+                }
             }
 
             // --- LÓGICA COLUNA L (Novo Serviço) ---
