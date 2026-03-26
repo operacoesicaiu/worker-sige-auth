@@ -93,10 +93,15 @@ async function run() {
         const COL = { CPF: 3, TIPO: 6, RESP: 15, CHAVE: 16, DATA: 19 };
 
         // 2. Busca Pedidos faturados ontem no SIGE
+        /*
         const ontem = new Date();
         ontem.setDate(ontem.getDate() - 1);
         const dataBusca = ontem.toISOString().split('T')[0];
         secureLog(`Buscando pedidos SIGE: ${dataBusca}`);
+        */
+        const dataInicial = "2026-03-01";
+        const hoje = new Date().toISOString().split('T')[0];
+        secureLog(`Iniciando busca SIGE: ${dataInicial} até ${hoje}`);
 
         const resSige = await axios.get("https://api.sigecloud.com.br/request/Pedidos/Pesquisar", {
             headers: sigeHeaders,
