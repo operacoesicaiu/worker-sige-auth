@@ -100,7 +100,7 @@ async function run() {
         secureLog(`Buscando pedidos SIGE: ${dataBusca}`);
         */
         const dataInicial = "2026-03-01";
-        const hoje = new Date().toISOString().split('T')[0];
+        const hoje = "2026-03-07";
         secureLog(`Iniciando busca SIGE: ${dataInicial} até ${hoje}`);
 
         const resSige = await axios.get("https://api.sigecloud.com.br/request/Pedidos/Pesquisar", {
