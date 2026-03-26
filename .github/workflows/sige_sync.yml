@@ -2,8 +2,10 @@ name: Sige Integration Worker
 
 on:
   repository_dispatch:
-    types: [report_token_ready]
-  workflow_dispatch: # Para testes manuais
+    types: 
+      - google_token_ready  # Para o fluxo automático diário
+      - report_token_ready  # Para o teste manual que você configurou
+  workflow_dispatch:        # Para testes manuais direto no botão do GitHub
 
 jobs:
   build:
@@ -22,9 +24,15 @@ jobs:
 
       - name: Run Sige Sync
         env:
+          # Segredos do SIGE
           SIGE_TOKEN: ${{ secrets.SIGE_TOKEN }}
           SIGE_USER: ${{ secrets.SIGE_USER }}
           SIGE_APP: ${{ secrets.SIGE_APP }}
+          
+          # IDs das Planilhas (Destino e Origem ERP)
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          ERP_SPREADSHEET_ID: ${{ secrets.ERP_SPREADSHEET_ID }} # <-- NOVO
+          
+          # Token injetado pelo Worker de Auth
           GOOGLE_TOKEN: ${{ secrets.GOOGLE_TOKEN }}
         run: node index.js
