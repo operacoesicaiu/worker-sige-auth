@@ -30,6 +30,49 @@ function dateToExcelSerial(dateStr) {
     return Math.floor(returnDateTime);
 }
 
+// --- NOVOS HELPERS ---
+
+function buscarDataRetirada(erpRows, cpfLimpo, dataVenda, COL) {
+    let maxDataSerial = 0;
+    
+    // Converte dataVenda para objeto Date para comparação
+    const dataLimite = new Date(dataVenda);
+    
+    erpRows.forEach(r => {
+        const erpCpfLimpo = (r[COL.CPF] || "").replace(/\D/g, "");
+        const tipo = (r[COL.TIPO] || "").toLowerCase();
+        const dataERPStr = r[COL.DATA]; // Assumindo DD/MM/YYYY
+        
+        if (erpCpfLimpo === cpfLimpo && tipo.includes("retirada")) {
+            const partes = dataERPStr.split('/');
+            const dataERP = new Date(partes[2], partes[1] - 1, partes[0]);
+            
+            // Filtro: Data ERP <= Data Venda
+            if (dataERP <= dataLimite) {
+                const serial = dateToExcelSerial(dataERPStr);
+                if (serial > maxDataSerial) maxDataSerial = serial;
+            }
+        }
+    });
+    return maxDataSerial > 0 ? maxDataSerial : "";
+}
+
+const buscarResp = (dataSerialBuscada, cpfLimpo) => {
+    if (!dataSerialBuscada) return "Sem vendedor";
+
+    // O Excel armazena datas como números. Se r[COL.DATA] no ERP 
+    // for lido como string "DD/MM/YYYY", precisamos converter antes de comparar.
+    const match = erpRows.find(r => {
+        const erpCpfLimpo = (r[COL.CPF] || "").replace(/\D/g, "");
+        const erpDataSerial = dateToExcelSerial(r[COL.DATA]);
+        
+        // Simula a chave: DataSerial + CPF
+        return (erpDataSerial === dataSerialBuscada && erpCpfLimpo === cpfLimpo);
+    });
+
+    return match ? match[COL.RESP] : "Sem vendedor";
+};
+
 // --- EXECUÇÃO PRINCIPAL ---
 
 async function run() {
@@ -79,36 +122,30 @@ async function run() {
                         headers: sigeHeaders, params: { cpfcnpj: clienteCpf }
                     });
                     if (resP.data && resP.data.length > 0) c = resP.data[0];
-                } catch (e) { secureLog(`Erro API Pessoas para CPF ${clienteCpf}`); }
+                } catch (e) { secureLog("Erro API Pessoas para CPF"); }
             }
 
-            // --- BUSCA DE AGENDAMENTOS NO ERP ---
+            // --- LÓGICA COLUNA L (Novo Serviço) ---
+            // Busca a data do tipo "Novo" mais próxima/recente
             let rawDataNovoServico = "";
-            let rawDataRetirada = "";
+            const matchNovo = erpRows.slice().reverse().find(r => 
+                (r[COL.CPF] || "").replace(/\D/g, "") === clienteCpfLimpo && 
+                (r[COL.TIPO] || "").toLowerCase().includes("novo")
+            );
+            if (matchNovo) rawDataNovoServico = matchNovo[COL.DATA];
+            const serialNovo = rawDataNovoServico ? dateToExcelSerial(rawDataNovoServico) : "";
 
-            for (let i = erpRows.length - 1; i >= 0; i--) {
-                const r = erpRows[i];
-                const erpCpfLimpo = (r[COL.CPF] || "").replace(/\D/g, "");
+            // --- LÓGICA COLUNA O (Retirada - MAXIFS) ---
+            const serialRetirada = buscarDataRetirada(erpRows, clienteCpfLimpo, dataVenda, COL);
 
-                if (erpCpfLimpo === clienteCpfLimpo && clienteCpfLimpo !== "") {
-                    const tipo = (r[COL.TIPO] || "").toLowerCase();
-                    if (!rawDataNovoServico && tipo.includes("novo")) rawDataNovoServico = r[COL.DATA];
-                    if (!rawDataRetirada && tipo.includes("retirada")) rawDataRetirada = r[COL.DATA];
-                }
-                if (rawDataNovoServico && rawDataRetirada) break;
-            }
-
-            const buscarResp = (dataAchada) => {
-                if (!dataAchada) return "Sem vendedor";
-                const chaveBuscadaLimpa = (dataAchada + clienteCpfLimpo).replace(/\D/g, "");
-                const match = erpRows.find(r => (r[COL.CHAVE] || "").replace(/\D/g, "").includes(chaveBuscadaLimpa));
-                return match ? match[COL.RESP] : "Sem vendedor";
-            };
+            // --- LÓGICA COLUNAS M e P (Responsáveis) ---
+            const respNovo = buscarResp(serialNovo, clienteCpfLimpo);
+            const respRetirada = buscarResp(serialRetirada, clienteCpfLimpo);
 
             const dataVenda = new Date(p.DataFaturamento || p.Data);
             const valorTotal = p.ValorFinal || 0;
 
-            // Montagem da linha final para o Google Sheets
+            // --- MONTAGEM DA LINHA ---
             rowsFinal.push([
                 sanitize((c.Celular || "").replace("+", "")), // A - Celular (API Pessoas)
                 p.Codigo, // B - Código
@@ -121,12 +158,12 @@ async function run() {
                 sanitize(p.Vendedor || ""), // I - Vendedor SIGE
                 sanitize(`Pedido ${p.Codigo}${p.NumeroNFe ? ' / NF Nº ' + p.NumeroNFe : ''}`), // J - Documento
                 sanitize(clienteCpf), // K - CPF
-                rawDataNovoServico ? dateToExcelSerial(rawDataNovoServico) : "", // L - Data Serial Novo
-                sanitize(buscarResp(rawDataNovoServico)), // M - Responsável Novo
-                rawDataRetirada !== "" ? (valorTotal * 0.5) : valorTotal, // N - Valor Calculado
-                rawDataRetirada ? dateToExcelSerial(rawDataRetirada) : "", // O - Data Serial Retirada (ex: 46106)
-                sanitize(buscarResp(rawDataRetirada)), // P - Responsável Retirada
-                rawDataRetirada !== "" ? (valorTotal * 0.5) : 0, // Q - Valor Retirada
+                serialNovo,      // L
+                sanitize(respNovo), // M
+                serialRetirada !== "" ? (valorTotal * 0.5) : valorTotal, // N
+                serialRetirada,  // O (Agora retorna o número serial 46106...)
+                sanitize(respRetirada), // P
+                serialRetirada !== "" ? (valorTotal * 0.5) : 0, // Q
                 `${dataVenda.getMonth() + 1}/${dataVenda.getFullYear()}` // R - Mês/Ano
             ]);
         }
