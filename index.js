@@ -57,10 +57,23 @@ async function run() {
         for (const p of pedidos) {
             try {
                 // Busca detalhada para pegar Celular, Telefone e Nome Fantasia
-                const resCliente = await axios.get(`https://api.sigecloud.com.br/request/Clientes/Obter/${p.ClienteID}`, {
-                    headers: sigeHeaders
-                });
-                const c = resCliente.data || {};
+                let c = {};
+                const clienteCpf = p.ClienteCNPJ || "";
+                if (clienteCpf) {
+                    try {
+                        const resPessoa = await axios.get("https://api.sigecloud.com.br/request/Pessoas/Pesquisar", {
+                            headers: sigeHeaders,
+                            params: { cpfcnpj: clienteCpf }
+                        });
+                        if (resPessoa.data && resPessoa.data.length > 0) {
+                            c = resPessoa.data[0]; // Take the first person found
+                        } else {
+                            secureLog(`Cliente com CPF/CNPJ ${clienteCpf} não encontrado na API ou dados vazios para Pedido ${p.Codigo}`, false);
+                        }
+                    } catch (errApi) {
+                        secureLog(`Erro na API ao buscar cliente ${clienteCpf} para Pedido ${p.Codigo}: ${errApi.message}`, true);
+                    }
+                }
 
                 // Lógica da Coluna J (Documento) exatamente como no seu sige_api.js
                 const numNF = p.NumeroNFe || "";
