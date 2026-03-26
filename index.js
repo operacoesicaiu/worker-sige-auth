@@ -58,14 +58,14 @@ function buscarDataRetirada(erpRows, cpfLimpo, dataVenda, COL) {
 const buscarResp = (dataSerialBuscada, cpfLimpo, erpRows, COL) => {
     if (!dataSerialBuscada) return "Sem vendedor";
 
-    // O Excel armazena datas como números. Se r[COL.DATA] no ERP 
-    // for lido como string "DD/MM/YYYY", precisamos converter antes de comparar.
+    // Remove o apóstrofo caso ele exista para fazer a comparação numérica
+    const serialLimpo = Number(dataSerialBuscada.toString().replace("'", ""));
+
     const match = erpRows.find(r => {
         const erpCpfLimpo = (r[COL.CPF] || "").replace(/\D/g, "");
         const erpDataSerial = dateToExcelSerial(r[COL.DATA]);
         
-        // Simula a chave: DataSerial + CPF
-        return (erpDataSerial === dataSerialBuscada && erpCpfLimpo === cpfLimpo);
+        return (erpDataSerial === serialLimpo && erpCpfLimpo === cpfLimpo);
     });
 
     return match ? match[COL.RESP] : "Sem vendedor";
