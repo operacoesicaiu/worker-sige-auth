@@ -95,7 +95,7 @@ async function run() {
                 ]);
 
             } catch (errCliente) {
-                secureLog(`Erro ao detalhar cliente do Pedido ${p.Codigo}: ${errCliente.message}`, true);
+                secureLog(`Erro ao detalhar dados adicionais para o Pedido ${p.Codigo}. Verifique a conectividade com a API de Pessoas.`, true);
                 rows.push(["", p.Codigo, p.StatusSistema, formatarDataBR(p.DataFaturamento), p.Cliente, "", p.ClienteEmail, p.ValorFinal, p.Vendedor, `Pedido ${p.Codigo}`, p.ClienteCNPJ]);
             }
         }
