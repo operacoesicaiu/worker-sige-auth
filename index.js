@@ -135,15 +135,15 @@ async function run() {
             if (matchNovo) rawDataNovoServico = matchNovo[COL.DATA];
             const serialNovo = rawDataNovoServico ? dateToExcelSerial(rawDataNovoServico) : "";
 
+            const dataVenda = new Date(p.DataFaturamento || p.Data);
+            const valorTotal = p.ValorFinal || 0;
+
             // --- LÓGICA COLUNA O (Retirada - MAXIFS) ---
             const serialRetirada = buscarDataRetirada(erpRows, clienteCpfLimpo, dataVenda, COL);
 
             // --- LÓGICA COLUNAS M e P (Responsáveis) ---
             const respNovo = buscarResp(serialNovo, clienteCpfLimpo);
             const respRetirada = buscarResp(serialRetirada, clienteCpfLimpo);
-
-            const dataVenda = new Date(p.DataFaturamento || p.Data);
-            const valorTotal = p.ValorFinal || 0;
 
             // --- MONTAGEM DA LINHA ---
             rowsFinal.push([
