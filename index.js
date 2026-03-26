@@ -19,7 +19,12 @@ function formatarDataBR(dataISO) {
     return data.toLocaleDateString('pt-BR');
 }
 
-// Converte "25/03/2026" para Objeto Date
+// Converte Data do JS para Número Serial do Excel (ex: 46106)
+function dateToExcelSerial(date) {
+    const returnDateTime = 25569.0 + (date.getTime() - (date.getTimezoneOffset() * 60 * 1000)) / (1000 * 60 * 60 * 24);
+    return Math.floor(returnDateTime);
+}
+
 function parseDataBR(str) {
     if (!str || typeof str !== 'string') return null;
     const partes = str.split('/');
@@ -33,16 +38,13 @@ async function run() {
         const gHeaders = { 'Authorization': `Bearer ${GOOGLE_TOKEN}`, 'Content-Type': 'application/json' };
         const sigeHeaders = { "Authorization-Token": SIGE_TOKEN, "User": SIGE_USER, "App": SIGE_APP, "Content-Type": "application/json" };
 
-        // 1. BUSCAR DADOS DO ERP (Apenas colunas necessárias para reduzir volume de dados)
-        // Buscamos o range que contém as colunas até AH (34 colunas)
-        secureLog("Solicitando colunas específicas do ERP (otimizando tráfego)...");
+        secureLog("Baixando dados do ERP...");
         const resErp = await axios.get(`https://sheets.googleapis.com/v4/spreadsheets/${ERP_SPREADSHEET_ID}/values/ERP!A:AH`, { headers: gHeaders });
         const erpRows = resErp.data.values || [];
         
-        // Índices das colunas (Base 0): D=3, G=6, N=13, Q=16, T=19, AH=33
+        // Mapeamento: D=3 (CPF), G=6 (Tipo), N=13 (Resp), Q=16 (Chave), T=19 (Data), AH=33 (MM/YYYY)
         const COL = { CPF: 3, TIPO: 6, RESP: 13, CHAVE: 16, DATA: 19, MESANO: 33 };
 
-        // 2. BUSCAR PEDIDOS SIGE (DIA ANTERIOR)
         const ontem = new Date();
         ontem.setDate(ontem.getDate() - 1);
         const dataBusca = ontem.toISOString().split('T')[0];
@@ -53,22 +55,21 @@ async function run() {
         });
 
         const pedidos = resSige.data || [];
-        if (pedidos.length === 0) return secureLog("Nenhum pedido para processar.");
+        if (pedidos.length === 0) return secureLog("Sem pedidos.");
 
         const rowsFinal = [];
 
         for (const p of pedidos) {
             let c = {};
-            const clienteCpf = p.ClienteCNPJ || "";
+            const clienteCpf = (p.ClienteCNPJ || "").replace(/\D/g, ""); // Apenas números para comparar
             
-            // Busca detalhes do cliente para Celular/Telefone
             if (clienteCpf) {
                 try {
                     const resP = await axios.get("https://api.sigecloud.com.br/request/Pessoas/Pesquisar", {
-                        headers: sigeHeaders, params: { cpfcnpj: clienteCpf }
+                        headers: sigeHeaders, params: { cpfcnpj: p.ClienteCNPJ }
                     });
                     if (resP.data?.length > 0) c = resP.data[0];
-                } catch (e) { secureLog(`Erro cliente ${p.Codigo}`); }
+                } catch (e) {}
             }
 
             const dataVenda = new Date(p.DataFaturamento || p.Data);
@@ -80,57 +81,58 @@ async function run() {
                 d.setMonth(d.getMonth() + offset);
                 return `${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
             };
-
             const mesesInteresse = [getMesAno(dataVenda, -2), getMesAno(dataVenda, -1), getMesAno(dataVenda, 0)];
 
-            let dataNovoServico = "";
-            let dataRetirada = "";
+            let rawDataNovoServico = "";
+            let rawDataRetirada = "";
 
-            // BUSCA DE BAIXO PARA CIMA (Otimizada para parar em 6 meses)
+            // Busca reversa no ERP
             for (let i = erpRows.length - 1; i >= 1; i--) {
                 const r = erpRows[i];
                 if (!r[COL.DATA]) continue;
 
                 const dataErpObj = parseDataBR(r[COL.DATA]);
-                if (!dataErpObj) continue;
-
-                // CRITÉRIO DE PARADA: Se a data da linha for anterior a 6 meses da venda, para de olhar esta venda
-                if (dataErpObj < dataLimite6Meses) break;
-                
-                // Se a data for futura à venda, ignora e continua descendo
-                if (dataErpObj > dataVenda) continue;
-
-                if (r[COL.CPF] === clienteCpf) {
-                    const mesAnoLinha = r[COL.MESANO];
-                    const tipoLinha = r[COL.TIPO];
-
-                    if (!dataNovoServico && tipoLinha === "Novo Serviço" && mesesInteresse.includes(mesAnoLinha)) {
-                        dataNovoServico = r[COL.DATA];
-                    }
-                    if (!dataRetirada && tipoLinha === "Retirada" && mesesInteresse.includes(mesAnoLinha)) {
-                        dataRetirada = r[COL.DATA];
-                    }
+                if (!dataErpObj || dataErpObj < dataLimite6Meses) {
+                    if (dataErpObj && dataErpObj < dataLimite6Meses) break; 
+                    continue;
                 }
                 
-                // Se já achou os dois, pode parar a busca para este pedido
-                if (dataNovoServico && dataRetirada) break;
+                if (dataErpObj > dataVenda) continue;
+
+                const erpCpfLimpo = (r[COL.CPF] || "").replace(/\D/g, "");
+                if (erpCpfLimpo === clienteCpf) {
+                    const tipo = (r[COL.TIPO] || "").trim();
+                    const mesAno = r[COL.MESANO];
+
+                    if (!rawDataNovoServico && tipo === "Novo Serviço" && mesesInteresse.includes(mesAno)) {
+                        rawDataNovoServico = r[COL.DATA];
+                    }
+                    if (!rawDataRetirada && tipo === "Retirada" && mesesInteresse.includes(mesAno)) {
+                        rawDataRetirada = r[COL.DATA];
+                    }
+                }
+                if (rawDataNovoServico && rawDataRetirada) break;
             }
 
-            // INDEX MATCH das colunas M e P
-            const buscarAgendador = (dataEncontrada) => {
+            // Simulação do CORRESP/ÍNDICE (Chave é Data + CPF original da linha)
+            const buscarResp = (dataEncontrada) => {
                 if (!dataEncontrada) return "Sem vendedor";
-                const chaveAlvo = dataEncontrada + clienteCpf;
-                // Busca novamente no ERP a linha que tem essa chave na coluna Q (16)
-                const linha = erpRows.find(r => r[COL.CHAVE] === chaveAlvo);
-                return linha ? linha[COL.RESP] : "Sem vendedor";
+                // Procura a linha onde a Coluna Q (Chave) bate exatamente
+                const chaveAlvo = dataEncontrada + p.ClienteCNPJ;
+                const match = erpRows.find(r => r[COL.CHAVE] === chaveAlvo);
+                return match ? match[COL.RESP] : "Sem vendedor";
             };
 
-            const respM = buscarAgendador(dataNovoServico);
-            const respP = buscarAgendador(dataRetirada);
-            
+            const respM = buscarResp(rawDataNovoServico);
+            const respP = buscarResp(rawDataRetirada);
+
+            // Conversão para Número Serial para as colunas L e O (estilo 46106)
+            const excelL = rawDataNovoServico ? dateToExcelSerial(parseDataBR(rawDataNovoServico)) : "";
+            const excelO = rawDataRetirada ? dateToExcelSerial(parseDataBR(rawDataRetirada)) : "";
+
             const valorTotal = p.ValorFinal || 0;
-            const valN = dataRetirada !== "" ? valorTotal * 0.5 : valorTotal;
-            const valQ = dataRetirada !== "" ? valorTotal * 0.5 : 0;
+            const valN = rawDataRetirada !== "" ? valorTotal * 0.5 : valorTotal;
+            const valQ = rawDataRetirada !== "" ? valorTotal * 0.5 : 0;
             const valR = `${dataVenda.getMonth() + 1}/${dataVenda.getFullYear()}`;
 
             rowsFinal.push([
@@ -144,30 +146,27 @@ async function run() {
                 valorTotal, // H
                 sanitize(p.Vendedor || ""), // I
                 sanitize(`Pedido ${p.Codigo}${p.NumeroNFe ? ' / NF Nº ' + p.NumeroNFe : ''}`), // J
-                sanitize(clienteCpf), // K
-                dataNovoServico, // L
+                sanitize(p.ClienteCNPJ || ""), // K
+                excelL, // L (Número Serial 46106)
                 sanitize(respM), // M
                 valN, // N
-                dataRetirada, // O
+                excelO, // O (Número Serial 46106)
                 sanitize(respP), // P
                 valQ, // Q
                 valR  // R
             ]);
         }
 
-        // Envio para aba Faturamento
         if (rowsFinal.length > 0) {
-            secureLog(`Salvando ${rowsFinal.length} registros...`);
             await axios.post(
                 `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Faturamento:append?valueInputOption=USER_ENTERED`,
                 { values: rowsFinal }, { headers: gHeaders }
             );
         }
-        secureLog("Finalizado.");
+        secureLog("Sucesso.");
     } catch (err) {
         secureLog(`Erro: ${err.message}`, true);
         process.exit(1);
     }
 }
-
 run();
