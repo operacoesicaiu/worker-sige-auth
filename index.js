@@ -92,46 +92,19 @@ async function run() {
         // Mapeamento baseado no CSV: D=3(CPF), G=6(Tipo), P=15(Responsável), Q=16(Chave), T=19(Data)
         const COL = { CPF: 3, TIPO: 6, RESP: 15, CHAVE: 16, DATA: 19 };
 
-        // 2. Busca Pedidos faturados no período desejado (01/03/2026 a 26/03/2026)
-        
-        const dataInicial = new Date('2026-03-01');
-        const dataFinal = new Date('2026-03-26');
-        const pedidos = [];
+        // 2. Busca Pedidos faturados ontem no SIGE
+        const ontem = new Date();
+        ontem.setDate(ontem.getDate() - 1);
+        const dataBusca = ontem.toISOString().split('T')[0];
+        secureLog(`Buscando pedidos SIGE: ${dataBusca}`);
 
-        secureLog(`Buscando pedidos SIGE do período ${dataInicial.toISOString().split('T')[0]} a ${dataFinal.toISOString().split('T')[0]}`);
+        const resSige = await axios.get("https://api.sigecloud.com.br/request/Pedidos/Pesquisar", {
+            headers: sigeHeaders,
+            params: { status: "Pedido Faturado", dataInicial: dataBusca, dataFinal: dataBusca, filtrarPor: 3, pageSize: 100 }
+        });
 
-        // Itera dia a dia para garantir que todas as requisições sejam feitas sequencialmente
-        for (let currentDate = new Date(dataInicial); currentDate <= dataFinal; currentDate.setDate(currentDate.getDate() + 1)) {
-            const dataBusca = currentDate.toISOString().split('T')[0];
-            secureLog(`Buscando pedidos SIGE para o dia: ${dataBusca}`);
-
-            try {
-                const resSige = await axios.get("https://api.sigecloud.com.br/request/Pedidos/Pesquisar", {
-                    headers: sigeHeaders,
-                    params: { status: "Pedido Faturado", dataInicial: dataBusca, dataFinal: dataBusca, filtrarPor: 3, pageSize: 100 }
-                });
-
-                const diaPedidos = resSige.data || [];
-                if (diaPedidos.length > 0) {
-                    pedidos.push(...diaPedidos);
-                    secureLog(`Dia ${dataBusca}: ${diaPedidos.length} pedidos encontrados`);
-                } else {
-                    secureLog(`Dia ${dataBusca}: nenhum pedido encontrado`);
-                }
-                
-                // Controle de Concorrência: Pequeno delay entre requisições para evitar bloqueio
-                await new Promise(resolve => setTimeout(resolve, 500)); // 500ms de delay
-            } catch (error) {
-                secureLog(`Erro ao buscar pedidos para o dia ${dataBusca}: ${error.message}`, true);
-                // Continua com os próximos dias mesmo se houver erro em algum dia
-            }
-        }
-
-        secureLog(`Total de pedidos coletados no período: ${pedidos.length}`);
+        const pedidos = resSige.data || [];
         if (pedidos.length === 0) return secureLog("Nenhum pedido para processar.");
-
-        // Cache de Clientes: Armazena clientes já consultados para evitar chamadas repetidas à API
-        const clienteCache = new Map();
 
         const rowsFinal = [];
 
@@ -142,23 +115,12 @@ async function run() {
             // --- BUSCA DETALHADA DO CLIENTE (PARA COLUNAS A e F) ---
             let c = {};
             if (clienteCpf) {
-                // Verifica se o cliente já foi consultado
-                if (clienteCache.has(clienteCpf)) {
-                    c = clienteCache.get(clienteCpf);
-                } else {
-                    try {
-                        const resP = await axios.get("https://api.sigecloud.com.br/request/Pessoas/Pesquisar", {
-                            headers: sigeHeaders, params: { cpfcnpj: clienteCpf }
-                        });
-                        if (resP.data && resP.data.length > 0) {
-                            c = resP.data[0];
-                            // Armazena no cache para consultas futuras
-                            clienteCache.set(clienteCpf, c);
-                        }
-                    } catch (e) { 
-                        secureLog("Erro API Pessoas para CPF"); 
-                    }
-                }
+                try {
+                    const resP = await axios.get("https://api.sigecloud.com.br/request/Pessoas/Pesquisar", {
+                        headers: sigeHeaders, params: { cpfcnpj: clienteCpf }
+                    });
+                    if (resP.data && resP.data.length > 0) c = resP.data[0];
+                } catch (e) { secureLog("Erro API Pessoas para CPF"); }
             }
 
             // --- LÓGICA COLUNA L (Novo Serviço) ---
@@ -223,29 +185,13 @@ async function run() {
             ]);
         }
 
-        // 3. Envio para a aba Faturamento (em lotes para evitar timeouts)
+        // 3. Envio para a aba Faturamento
         if (rowsFinal.length > 0) {
-            const batchSize = 100; // Tamanho do lote para evitar timeouts
-            const totalBatches = Math.ceil(rowsFinal.length / batchSize);
-            
-            secureLog(`Iniciando envio de ${rowsFinal.length} registros em ${totalBatches} lotes de até ${batchSize} linhas cada.`);
-            
-            for (let i = 0; i < rowsFinal.length; i += batchSize) {
-                const batch = rowsFinal.slice(i, i + batchSize);
-                try {
-                    await axios.post(
-                        `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Faturamento:append?valueInputOption=USER_ENTERED`,
-                        { values: batch }, { headers: gHeaders }
-                    );
-                    const batchNumber = Math.floor(i / batchSize) + 1;
-                    secureLog(`Lote ${batchNumber}/${totalBatches} enviado com sucesso (${batch.length} registros).`);
-                } catch (error) {
-                    secureLog(`Erro ao enviar lote ${Math.floor(i / batchSize) + 1}: ${error.message}`, true);
-                    // Continua tentando enviar os próximos lotes mesmo se um falhar
-                }
-            }
-            
-            secureLog(`Processo finalizado: ${rowsFinal.length} registros inseridos em ${totalBatches} lotes.`);
+            await axios.post(
+                `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Faturamento:append?valueInputOption=USER_ENTERED`,
+                { values: rowsFinal }, { headers: gHeaders }
+            );
+            secureLog(`Processo finalizado: ${rowsFinal.length} registros inseridos.`);
         }
 
     } catch (err) {
