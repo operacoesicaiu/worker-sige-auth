@@ -1,0 +1,30 @@
+name: Sige Integration Worker
+
+on:
+  repository_dispatch:
+    types: [google_token_ready]
+  workflow_dispatch: # Para testes manuais
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install axios
+
+      - name: Run Sige Sync
+        env:
+          SIGE_TOKEN: ${{ secrets.SIGE_TOKEN }}
+          SIGE_USER: ${{ secrets.SIGE_USER }}
+          SIGE_APP: ${{ secrets.SIGE_APP }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_TOKEN: ${{ secrets.GOOGLE_TOKEN }}
+        run: node index.js
