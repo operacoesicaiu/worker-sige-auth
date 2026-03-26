@@ -36,6 +36,7 @@ async function run() {
 
         secureLog(`Iniciando extração SIGE para o dia: ${dataBusca}`);
 
+        // 1. Busca de Pedidos
         const resSige = await axios.get("https://api.sigecloud.com.br/request/Pedidos/Pesquisar", {
             headers: sigeHeaders,
             params: {
@@ -54,19 +55,21 @@ async function run() {
 
         const rows = [];
 
+        // 2. Chamada EXTRA OBRIGATÓRIA para cada cliente
         for (const p of pedidos) {
             try {
-                // Busca detalhada para pegar Celular, Telefone e Nome Fantasia
+                // Importante: Usamos p.ClienteID para a chamada extra
                 const resCliente = await axios.get(`https://api.sigecloud.com.br/request/Clientes/Obter/${p.ClienteID}`, {
                     headers: sigeHeaders
                 });
+                
                 const c = resCliente.data || {};
 
-                // Lógica da Coluna J (Documento) exatamente como no seu sige_api.js
+                // Lógica de Documento (Coluna J) conforme sige_api.js
                 const numNF = p.NumeroNFe || "";
-                const documentoFormatado = `Pedido ${p.Codigo}${numNF ? ' / NF Nº ' + numNF : ''}`;
+                const documentoFormatado = `Pedido ${p.Codigo}${numNF ? ' / NF Nº ' + numNF : ''}.`;
 
-                // Montagem seguindo a ordem exata que você passou
+                // Montagem na ordem exata solicitada
                 rows.push([
                     sanitize(c.Celular || ""),                    // A - Cliente Celular
                     p.Codigo,                                     // B - Código
@@ -77,17 +80,22 @@ async function run() {
                     sanitize(c.Email || p.ClienteEmail || ""),    // G - Cliente E-mail
                     p.ValorFinal || 0,                            // H - Venda Valor Total
                     sanitize(p.Vendedor || ""),                   // I - Venda Vendedor
-                    sanitize(documentoFormatado),                 // J - Nº Documento (Pedido + NF)
+                    sanitize(documentoFormatado),                 // J - Nº Documento
                     sanitize(p.ClienteCNPJ || "")                 // K - Cliente CPF/CNPJ
                 ]);
 
             } catch (errCliente) {
-                secureLog(`Erro ao detalhar cliente do Pedido ${p.Codigo}: ${errCliente.message}`, true);
-                rows.push(["", p.Codigo, p.StatusSistema, formatarDataBR(p.DataFaturamento), p.Cliente, "", p.ClienteEmail, p.ValorFinal, p.Vendedor, `Pedido ${p.Codigo}`, p.ClienteCNPJ]);
+                // Se o 404 persistir em algum ID, este log ajudará a identificar qual ID está falhando
+                secureLog(`Falha na chamada extra do ClienteID ${p.ClienteID} (Pedido ${p.Codigo}): ${errCliente.message}`, true);
+                
+                // Fallback para não perder a linha na planilha caso um cliente específico dê erro
+                const docErr = `Pedido ${p.Codigo}${p.NumeroNFe ? ' / NF Nº ' + p.NumeroNFe : ''}.`;
+                rows.push(["", p.Codigo, p.StatusSistema, formatarDataBR(p.DataFaturamento), p.Cliente, "", p.ClienteEmail, p.ValorFinal, p.Vendedor, docErr, p.ClienteCNPJ]);
             }
         }
 
-        secureLog("Enviando dados para o Google Sheets (Aba Faturamento)...");
+        // 3. Envio para Google Sheets
+        secureLog("Enviando dados consolidados para o Google Sheets...");
         
         await axios.post(
             `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Faturamento:append?valueInputOption=USER_ENTERED`,
@@ -95,10 +103,10 @@ async function run() {
             { headers: { 'Authorization': `Bearer ${GOOGLE_TOKEN}`, 'Content-Type': 'application/json' } }
         );
 
-        secureLog("Processo finalizado com sucesso.");
+        secureLog("Processo concluído com sucesso.");
 
     } catch (err) {
-        secureLog(`Erro Crítico: ${err.message}`, true);
+        secureLog(`Erro Crítico no Fluxo: ${err.message}`, true);
         process.exit(1);
     }
 }
