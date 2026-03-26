@@ -81,7 +81,7 @@ async function run() {
 
                 // Montagem seguindo a ordem exata que você passou
                 rows.push([
-                    sanitize(c.Celular || ""),                    // A - Cliente Celular
+                    sanitize((c.Celular || "").replace("+", "")),                    // A - Cliente Celular
                     p.Codigo,                                     // B - Código
                     sanitize(p.StatusSistema || ""),              // C - Venda Status do Sistema
                     formatarDataBR(p.DataFaturamento || p.Data),  // D - Venda Data
