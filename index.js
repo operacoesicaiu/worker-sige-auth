@@ -206,13 +206,29 @@ async function run() {
             ]);
         }
 
-        // 3. Envio para a aba Faturamento
+        // 3. Envio para a aba Faturamento (em lotes para evitar timeouts)
         if (rowsFinal.length > 0) {
-            await axios.post(
-                `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Faturamento:append?valueInputOption=USER_ENTERED`,
-                { values: rowsFinal }, { headers: gHeaders }
-            );
-            secureLog(`Processo finalizado: ${rowsFinal.length} registros inseridos.`);
+            const batchSize = 100; // Tamanho do lote para evitar timeouts
+            const totalBatches = Math.ceil(rowsFinal.length / batchSize);
+            
+            secureLog(`Iniciando envio de ${rowsFinal.length} registros em ${totalBatches} lotes de até ${batchSize} linhas cada.`);
+            
+            for (let i = 0; i < rowsFinal.length; i += batchSize) {
+                const batch = rowsFinal.slice(i, i + batchSize);
+                try {
+                    await axios.post(
+                        `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Faturamento:append?valueInputOption=USER_ENTERED`,
+                        { values: batch }, { headers: gHeaders }
+                    );
+                    const batchNumber = Math.floor(i / batchSize) + 1;
+                    secureLog(`Lote ${batchNumber}/${totalBatches} enviado com sucesso (${batch.length} registros).`);
+                } catch (error) {
+                    secureLog(`Erro ao enviar lote ${Math.floor(i / batchSize) + 1}: ${error.message}`, true);
+                    // Continua tentando enviar os próximos lotes mesmo se um falhar
+                }
+            }
+            
+            secureLog(`Processo finalizado: ${rowsFinal.length} registros inseridos em ${totalBatches} lotes.`);
         }
 
     } catch (err) {
