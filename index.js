@@ -34,7 +34,7 @@ async function run() {
         ontem.setDate(ontem.getDate() - 1);
         const dataBusca = ontem.toISOString().split('T')[0];
 
-        secureLog(`Buscando pedidos faturados em: ${dataBusca}`);
+        secureLog(`Iniciando extração SIGE para o dia: ${dataBusca}`);
 
         const resSige = await axios.get("https://api.sigecloud.com.br/request/Pedidos/Pesquisar", {
             headers: sigeHeaders,
@@ -56,53 +56,49 @@ async function run() {
 
         for (const p of pedidos) {
             try {
-                secureLog(`Buscando detalhes do cliente: ${p.Cliente}`);
-                
+                // Busca detalhada para pegar Celular, Telefone e Nome Fantasia
                 const resCliente = await axios.get(`https://api.sigecloud.com.br/request/Clientes/Obter/${p.ClienteID}`, {
                     headers: sigeHeaders
                 });
                 const c = resCliente.data || {};
 
-                // ORDEM SOLICITADA:
-                // Celular, Código, Status, Data, Nome Fantasia, Telefone, Email, Valor, Vendedor, Doc, CNPJ
+                // Lógica da Coluna J (Documento) exatamente como no seu sige_api.js
+                const numNF = p.NumeroNFe || "";
+                const documentoFormatado = `Pedido ${p.Codigo}${numNF ? ' / NF Nº ' + numNF : ''}`;
+
+                // Montagem seguindo a ordem exata que você passou
                 rows.push([
-                    sanitize(c.Celular || ""),                    // Cliente Celular
-                    p.Codigo,                                     // Código
-                    sanitize(p.StatusSistema || ""),              // Venda Status do Sistema
-                    formatarDataBR(p.DataFaturamento || p.Data),  // Venda Data
-                    sanitize(c.NomeFantasia || p.Cliente || ""),  // Cliente Nome Fantasia
-                    sanitize(c.Telefone || ""),                   // Cliente Telefone
-                    sanitize(c.Email || p.ClienteEmail || ""),    // Cliente E-mail
-                    p.ValorFinal || 0,                            // Venda Valor Total
-                    sanitize(p.Vendedor || ""),                   // Venda Vendedor
-                    sanitize(p.NumeroNFe || ""),                  // Nº Documento
-                    sanitize(p.ClienteCNPJ || "")                 // Cliente CPF/CNPJ
+                    sanitize(c.Celular || ""),                    // A - Cliente Celular
+                    p.Codigo,                                     // B - Código
+                    sanitize(p.StatusSistema || ""),              // C - Venda Status do Sistema
+                    formatarDataBR(p.DataFaturamento || p.Data),  // D - Venda Data
+                    sanitize(c.NomeFantasia || p.Cliente || ""),  // E - Cliente Nome Fantasia
+                    sanitize(c.Telefone || ""),                   // F - Cliente Telefone
+                    sanitize(c.Email || p.ClienteEmail || ""),    // G - Cliente E-mail
+                    p.ValorFinal || 0,                            // H - Venda Valor Total
+                    sanitize(p.Vendedor || ""),                   // I - Venda Vendedor
+                    sanitize(documentoFormatado),                 // J - Nº Documento (Pedido + NF)
+                    sanitize(p.ClienteCNPJ || "")                 // K - Cliente CPF/CNPJ
                 ]);
 
             } catch (errCliente) {
-                secureLog(`Erro nos detalhes do cliente (Pedido ${p.Codigo}): ${errCliente.message}`, true);
-                // Fallback para não travar o processo
-                rows.push(["", p.Codigo, p.StatusSistema, formatarDataBR(p.DataFaturamento), p.Cliente, "", p.ClienteEmail, p.ValorFinal, p.Vendedor, p.NumeroNFe, p.ClienteCNPJ]);
+                secureLog(`Erro ao detalhar cliente do Pedido ${p.Codigo}: ${errCliente.message}`, true);
+                rows.push(["", p.Codigo, p.StatusSistema, formatarDataBR(p.DataFaturamento), p.Cliente, "", p.ClienteEmail, p.ValorFinal, p.Vendedor, `Pedido ${p.Codigo}`, p.ClienteCNPJ]);
             }
         }
 
-        secureLog("Enviando dados formatados para o Google Sheets...");
+        secureLog("Enviando dados para o Google Sheets (Aba Faturamento)...");
         
         await axios.post(
             `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Faturamento:append?valueInputOption=USER_ENTERED`,
             { values: rows },
-            { 
-                headers: { 
-                    'Authorization': `Bearer ${GOOGLE_TOKEN}`,
-                    'Content-Type': 'application/json' 
-                } 
-            }
+            { headers: { 'Authorization': `Bearer ${GOOGLE_TOKEN}`, 'Content-Type': 'application/json' } }
         );
 
-        secureLog("Finalizado com sucesso.");
+        secureLog("Processo finalizado com sucesso.");
 
     } catch (err) {
-        secureLog(`Erro crítico: ${err.message}`, true);
+        secureLog(`Erro Crítico: ${err.message}`, true);
         process.exit(1);
     }
 }
