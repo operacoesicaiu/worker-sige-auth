@@ -92,125 +92,107 @@ async function run() {
         // Mapeamento baseado no CSV: D=3(CPF), G=6(Tipo), P=15(Responsável), Q=16(Chave), T=19(Data)
         const COL = { CPF: 3, TIPO: 6, RESP: 15, CHAVE: 16, DATA: 19 };
 
-        // 2. Busca Pedidos faturados de 01/03/2026 a 26/03/2026
-        const startDate = new Date('2026-03-01');
-        const endDate = new Date('2026-03-26');
-        
-        secureLog(`Iniciando busca de pedidos SIGE de ${startDate.toISOString().split('T')[0]} a ${endDate.toISOString().split('T')[0]}`);
-        
-        // Loop através de cada dia no intervalo
-        for (let currentDate = new Date(startDate); currentDate <= endDate; currentDate.setDate(currentDate.getDate() + 1)) {
-            const dataBusca = currentDate.toISOString().split('T')[0];
-            secureLog(`Buscando pedidos SIGE para: ${dataBusca}`);
+        // 2. Busca Pedidos faturados ontem no SIGE
+        const ontem = new Date();
+        ontem.setDate(ontem.getDate() - 1);
+        const dataBusca = ontem.toISOString().split('T')[0];
+        secureLog(`Buscando pedidos SIGE: ${dataBusca}`);
+
+        const resSige = await axios.get("https://api.sigecloud.com.br/request/Pedidos/Pesquisar", {
+            headers: sigeHeaders,
+            params: { status: "Pedido Faturado", dataInicial: dataBusca, dataFinal: dataBusca, filtrarPor: 3, pageSize: 100 }
+        });
+
+        const pedidos = resSige.data || [];
+        if (pedidos.length === 0) return secureLog("Nenhum pedido para processar.");
+
+        const rowsFinal = [];
+
+        for (const p of pedidos) {
+            const clienteCpf = p.ClienteCNPJ || "";
+            const clienteCpfLimpo = clienteCpf.replace(/\D/g, "");
             
-            try {
-                const resSige = await axios.get("https://api.sigecloud.com.br/request/Pedidos/Pesquisar", {
-                    headers: sigeHeaders,
-                    params: { status: "Pedido Faturado", dataInicial: dataBusca, dataFinal: dataBusca, filtrarPor: 3, pageSize: 100 }
-                });
-                
-                const diaPedidos = resSige.data || [];
-                if (diaPedidos.length > 0) {
-                    secureLog(`Dia ${dataBusca}: ${diaPedidos.length} pedidos encontrados`);
-                    
-                    // Processar e enviar imediatamente os pedidos deste dia
-                    const rowsFinal = [];
-
-                    for (const p of diaPedidos) {
-                        const clienteCpf = p.ClienteCNPJ || "";
-                        const clienteCpfLimpo = clienteCpf.replace(/\D/g, "");
-                        
-                        // --- BUSCA DETALHADA DO CLIENTE (PARA COLUNAS A e F) ---
-                        let c = {};
-                        if (clienteCpf) {
-                            try {
-                                const resP = await axios.get("https://api.sigecloud.com.br/request/Pessoas/Pesquisar", {
-                                    headers: sigeHeaders, params: { cpfcnpj: clienteCpf }
-                                });
-                                if (resP.data && resP.data.length > 0) c = resP.data[0];
-                            } catch (e) { secureLog("Erro API Pessoas para CPF"); }
-                        }
-
-                        // --- LÓGICA COLUNA L (Novo Serviço) ---
-                        // Busca a data do tipo "Novo" mais próxima/recente
-                       let serialNovo = "";
-                        let respNovo = "Sem vendedor";
-                        let serialRetirada = "";
-                        let respRetirada = "Sem vendedor";
-
-                        const dataVenda = new Date(p.DataFaturamento || p.Data);
-                        const valorTotal = p.ValorFinal || 0;
-
-                        // Busca os dados de "Novo" e "Retirada" em uma única passagem
-                        erpRows.slice().reverse().forEach(r => {
-                            const erpCpfLimpo = (r[COL.CPF] || "").replace(/\D/g, "");
-                            if (erpCpfLimpo !== clienteCpfLimpo) return;
-
-                            const tipo = (r[COL.TIPO] || "").toLowerCase();
-                            const dataERPStr = r[COL.DATA];
-                            
-                            // Se for NOVO e ainda não achamos o mais recente
-                            if (tipo.includes("novo") && serialNovo === "") {
-                                serialNovo = dateToExcelSerial(dataERPStr);
-                                respNovo = r[COL.RESP] || "Sem vendedor";
-                            }
-
-                            // Se for RETIRADA e for antes/no dia da venda
-                            if (tipo.includes("retirada") && serialRetirada === "") {
-                                const partes = dataERPStr.split('/');
-                                const dataERP = new Date(partes[2], partes[1] - 1, partes[0]);
-                                if (dataERP <= dataVenda) {
-                                    serialRetirada = dateToExcelSerial(dataERPStr);
-                                    respRetirada = r[COL.RESP] || "Sem vendedor";
-                                }
-                            }
-                        });
-
-                        // Ajuste para não virar data e inserir 0 se estiver vazio
-                        const displayNovo = serialNovo !== "" ? `'${serialNovo}` : 0;
-                        const displayRetirada = serialRetirada !== "" ? `'${serialRetirada}` : 0;
-
-                        // --- MONTAGEM DA LINHA ---
-                        rowsFinal.push([
-                            sanitize((c.Celular || "").replace("+", "")), // A
-                            p.Codigo, // B
-                            sanitize(p.StatusSistema || ""), // C
-                            formatarDataBR(dataVenda), // D
-                            sanitize(c.NomeFantasia || p.Cliente || ""), // E
-                            sanitize(c.Telefone || ""), // F
-                            sanitize(c.Email || p.ClienteEmail || ""), // G
-                            valorTotal, // H
-                            sanitize(p.Vendedor || ""), // I
-                            sanitize(`Pedido ${p.Codigo}${p.NumeroNFe ? ' / NF Nº ' + p.NumeroNFe : ''}`), // J
-                            sanitize(clienteCpf), // K
-                            displayNovo,          // L (Envia '46106 ou 0)
-                            sanitize(respNovo),   // M
-                            serialRetirada !== "" ? (valorTotal * 0.5) : valorTotal, // N
-                            displayRetirada,      // O (Envia '46106 ou 0)
-                            sanitize(respRetirada), // P
-                            serialRetirada !== "" ? (valorTotal * 0.5) : 0,          // Q
-                            `${dataVenda.getMonth() + 1}/${dataVenda.getFullYear()}` // R
-                        ]);
-                    }
-
-                    // 3. Envio para a aba Faturamento (imediatamente após processar o dia)
-                    if (rowsFinal.length > 0) {
-                        await axios.post(
-                            `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Faturamento:append?valueInputOption=USER_ENTERED`,
-                            { values: rowsFinal }, { headers: gHeaders }
-                        );
-                        secureLog(`Dia ${dataBusca} processado: ${rowsFinal.length} registros inseridos.`);
-                    }
-                } else {
-                    secureLog(`Dia ${dataBusca}: Nenhum pedido encontrado`);
-                }
-            } catch (error) {
-                secureLog(`Erro ao buscar pedidos para ${dataBusca}: ${error.message}`, true);
-                // Continua com os próximos dias mesmo se houver erro em um dia específico
+            // --- BUSCA DETALHADA DO CLIENTE (PARA COLUNAS A e F) ---
+            let c = {};
+            if (clienteCpf) {
+                try {
+                    const resP = await axios.get("https://api.sigecloud.com.br/request/Pessoas/Pesquisar", {
+                        headers: sigeHeaders, params: { cpfcnpj: clienteCpf }
+                    });
+                    if (resP.data && resP.data.length > 0) c = resP.data[0];
+                } catch (e) { secureLog("Erro API Pessoas para CPF"); }
             }
+
+            // --- LÓGICA COLUNA L (Novo Serviço) ---
+            // Busca a data do tipo "Novo" mais próxima/recente
+           let serialNovo = "";
+            let respNovo = "Sem vendedor";
+            let serialRetirada = "";
+            let respRetirada = "Sem vendedor";
+
+            const dataVenda = new Date(p.DataFaturamento || p.Data);
+            const valorTotal = p.ValorFinal || 0;
+
+            // Busca os dados de "Novo" e "Retirada" em uma única passagem
+            erpRows.slice().reverse().forEach(r => {
+                const erpCpfLimpo = (r[COL.CPF] || "").replace(/\D/g, "");
+                if (erpCpfLimpo !== clienteCpfLimpo) return;
+
+                const tipo = (r[COL.TIPO] || "").toLowerCase();
+                const dataERPStr = r[COL.DATA];
+                
+                // Se for NOVO e ainda não achamos o mais recente
+                if (tipo.includes("novo") && serialNovo === "") {
+                    serialNovo = dateToExcelSerial(dataERPStr);
+                    respNovo = r[COL.RESP] || "Sem vendedor";
+                }
+
+                // Se for RETIRADA e for antes/no dia da venda
+                if (tipo.includes("retirada") && serialRetirada === "") {
+                    const partes = dataERPStr.split('/');
+                    const dataERP = new Date(partes[2], partes[1] - 1, partes[0]);
+                    if (dataERP <= dataVenda) {
+                        serialRetirada = dateToExcelSerial(dataERPStr);
+                        respRetirada = r[COL.RESP] || "Sem vendedor";
+                    }
+                }
+            });
+
+            // Ajuste para não virar data e inserir 0 se estiver vazio
+            const displayNovo = serialNovo !== "" ? `'${serialNovo}` : 0;
+            const displayRetirada = serialRetirada !== "" ? `'${serialRetirada}` : 0;
+
+            // --- MONTAGEM DA LINHA ---
+            rowsFinal.push([
+                sanitize((c.Celular || "").replace("+", "")), // A
+                p.Codigo, // B
+                sanitize(p.StatusSistema || ""), // C
+                formatarDataBR(dataVenda), // D
+                sanitize(c.NomeFantasia || p.Cliente || ""), // E
+                sanitize(c.Telefone || ""), // F
+                sanitize(c.Email || p.ClienteEmail || ""), // G
+                valorTotal, // H
+                sanitize(p.Vendedor || ""), // I
+                sanitize(`Pedido ${p.Codigo}${p.NumeroNFe ? ' / NF Nº ' + p.NumeroNFe : ''}`), // J
+                sanitize(clienteCpf), // K
+                displayNovo,          // L (Envia '46106 ou 0)
+                sanitize(respNovo),   // M
+                serialRetirada !== "" ? (valorTotal * 0.5) : valorTotal, // N
+                displayRetirada,      // O (Envia '46106 ou 0)
+                sanitize(respRetirada), // P
+                serialRetirada !== "" ? (valorTotal * 0.5) : 0,          // Q
+                `${dataVenda.getMonth() + 1}/${dataVenda.getFullYear()}` // R
+            ]);
         }
-        
-        secureLog("Processo finalizado: todos os dias foram processados.");
+
+        // 3. Envio para a aba Faturamento
+        if (rowsFinal.length > 0) {
+            await axios.post(
+                `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Faturamento:append?valueInputOption=USER_ENTERED`,
+                { values: rowsFinal }, { headers: gHeaders }
+            );
+            secureLog(`Processo finalizado: ${rowsFinal.length} registros inseridos.`);
+        }
 
     } catch (err) {
         secureLog(`Erro Crítico na execução. Verifique as credenciais e conexão.`, true);
