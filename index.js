@@ -13,7 +13,6 @@ function sanitize(val) {
     return val;
 }
 
-// Helper para formatar data ISO para DD/MM/YYYY
 function formatarDataBR(dataISO) {
     if (!dataISO) return "";
     const data = new Date(dataISO);
@@ -31,21 +30,19 @@ async function run() {
             "Content-Type": "application/json",
         };
 
-        // 1. Definir período (Ontem)
         const ontem = new Date();
         ontem.setDate(ontem.getDate() - 1);
         const dataBusca = ontem.toISOString().split('T')[0];
 
-        secureLog(`Iniciando busca de pedidos para o dia: ${dataBusca}`);
+        secureLog(`Buscando pedidos faturados em: ${dataBusca}`);
 
-        // 2. Buscar Pedidos Faturados
         const resSige = await axios.get("https://api.sigecloud.com.br/request/Pedidos/Pesquisar", {
             headers: sigeHeaders,
             params: {
                 status: "Pedido Faturado",
                 dataInicial: dataBusca,
                 dataFinal: dataBusca,
-                filtrarPor: 3, // Data de Faturamento
+                filtrarPor: 3,
                 pageSize: 100
             }
         });
@@ -57,40 +54,39 @@ async function run() {
 
         const rows = [];
 
-        // 3. Para cada pedido, buscar detalhes do cliente (Conforme sige_api.js)
         for (const p of pedidos) {
             try {
-                secureLog(`Processando Pedido ${p.Codigo} - Cliente: ${p.Cliente}`);
+                secureLog(`Buscando detalhes do cliente: ${p.Cliente}`);
                 
-                // Busca detalhada do cliente para pegar Telefone e outros campos
                 const resCliente = await axios.get(`https://api.sigecloud.com.br/request/Clientes/Obter/${p.ClienteID}`, {
                     headers: sigeHeaders
                 });
                 const c = resCliente.data || {};
 
-                // Montagem das colunas seguindo a ordem do seu sige_api.js
+                // ORDEM SOLICITADA:
+                // Celular, Código, Status, Data, Nome Fantasia, Telefone, Email, Valor, Vendedor, Doc, CNPJ
                 rows.push([
-                    p.Codigo,                                      // CódigoVenda
-                    sanitize(p.StatusSistema || ""),              // Status do Sistema
-                    formatarDataBR(p.DataFaturamento || p.Data),  // Venda.Data (DD/MM/YYYY)
-                    sanitize(c.NomeFantasia || p.Cliente || ""),  // Cliente.Nome Fantasia
-                    sanitize(c.Telefone || ""),                   // Cliente.Telefone
-                    sanitize(c.Email || p.ClienteEmail || ""),    // Cliente.E-mail
-                    p.ValorFinal || 0,                            // Venda.Valor Total
-                    sanitize(p.Vendedor || ""),                   // Venda.Vendedor
+                    sanitize(c.Celular || ""),                    // Cliente Celular
+                    p.Codigo,                                     // Código
+                    sanitize(p.StatusSistema || ""),              // Venda Status do Sistema
+                    formatarDataBR(p.DataFaturamento || p.Data),  // Venda Data
+                    sanitize(c.NomeFantasia || p.Cliente || ""),  // Cliente Nome Fantasia
+                    sanitize(c.Telefone || ""),                   // Cliente Telefone
+                    sanitize(c.Email || p.ClienteEmail || ""),    // Cliente E-mail
+                    p.ValorFinal || 0,                            // Venda Valor Total
+                    sanitize(p.Vendedor || ""),                   // Venda Vendedor
                     sanitize(p.NumeroNFe || ""),                  // Nº Documento
-                    sanitize(p.ClienteCNPJ || "")                 // Cliente.CPF/CNPJ
+                    sanitize(p.ClienteCNPJ || "")                 // Cliente CPF/CNPJ
                 ]);
 
             } catch (errCliente) {
-                secureLog(`Erro ao buscar cliente do pedido ${p.Codigo}: ${errCliente.message}`, true);
-                // Caso falhe o cliente, insere com dados básicos do pedido para não perder a linha
-                rows.push([p.Codigo, p.StatusSistema, formatarDataBR(p.DataFaturamento), p.Cliente, "", p.ClienteEmail, p.ValorFinal, p.Vendedor, p.NumeroNFe, p.ClienteCNPJ]);
+                secureLog(`Erro nos detalhes do cliente (Pedido ${p.Codigo}): ${errCliente.message}`, true);
+                // Fallback para não travar o processo
+                rows.push(["", p.Codigo, p.StatusSistema, formatarDataBR(p.DataFaturamento), p.Cliente, "", p.ClienteEmail, p.ValorFinal, p.Vendedor, p.NumeroNFe, p.ClienteCNPJ]);
             }
         }
 
-        // 4. Enviar para o Google Sheets na aba Faturamento
-        secureLog("Enviando dados para a aba Faturamento...");
+        secureLog("Enviando dados formatados para o Google Sheets...");
         
         await axios.post(
             `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Faturamento:append?valueInputOption=USER_ENTERED`,
@@ -103,10 +99,10 @@ async function run() {
             }
         );
 
-        secureLog("Processo concluído com sucesso.");
+        secureLog("Finalizado com sucesso.");
 
     } catch (err) {
-        secureLog(`Erro na execução: ${err.message}`, true);
+        secureLog(`Erro crítico: ${err.message}`, true);
         process.exit(1);
     }
 }
